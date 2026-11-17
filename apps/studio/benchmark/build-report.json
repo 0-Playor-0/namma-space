@@ -1,0 +1,198 @@
+{
+  "schemaVersion": 2,
+  "createdAt": "2026-10-30T15:21:07.365919+00:00",
+  "dist": "dist",
+  "artifacts": [
+    {
+      "path": "dist/assets/PlayCanvasViewer-BBGalIni.js",
+      "bytes": 2033336,
+      "gzipBytes": 521469
+    },
+    {
+      "path": "dist/assets/browser-Cgug2DPz.js",
+      "bytes": 8922,
+      "gzipBytes": 4445
+    },
+    {
+      "path": "dist/assets/index-B5FEW2Dp.css",
+      "bytes": 46294,
+      "gzipBytes": 9664
+    },
+    {
+      "path": "dist/assets/index-DV4EAHL-.js",
+      "bytes": 462395,
+      "gzipBytes": 144162
+    },
+    {
+      "path": "dist/assets/index-V7xXUF1b.js",
+      "bytes": 3520,
+      "gzipBytes": 1422
+    },
+    {
+      "path": "dist/assets/qrcode-5IewWFXk.js",
+      "bytes": 21140,
+      "gzipBytes": 7628
+    },
+    {
+      "path": "dist/assets/three.module-Dljb2UHm.js",
+      "bytes": 746766,
+      "gzipBytes": 189564
+    },
+    {
+      "path": "dist/favicon.svg",
+      "bytes": 378,
+      "gzipBytes": 287
+    },
+    {
+      "path": "dist/fonts/OFL-Archivo.txt",
+      "bytes": 4388,
+      "gzipBytes": 1960
+    },
+    {
+      "path": "dist/fonts/OFL-IBMPlexMono.txt",
+      "bytes": 4456,
+      "gzipBytes": 1990
+    },
+    {
+      "path": "dist/fonts/OFL-note.md",
+      "bytes": 1311,
+      "gzipBytes": 709
+    },
+    {
+      "path": "dist/fonts/archivo-latin-var-wght400-700.woff2",
+      "bytes": 34940,
+      "gzipBytes": 34973
+    },
+    {
+      "path": "dist/fonts/ibm-plex-mono-latin-400.woff2",
+      "bytes": 10052,
+      "gzipBytes": 10075
+    },
+    {
+      "path": "dist/fonts/ibm-plex-mono-latin-500.woff2",
+      "bytes": 10060,
+      "gzipBytes": 10083
+    },
+    {
+      "path": "dist/index.html",
+      "bytes": 1135,
+      "gzipBytes": 559
+    },
+    {
+      "path": "dist/scenes/fixture/manifest.json",
+      "bytes": 1133,
+      "gzipBytes": 615
+    },
+    {
+      "path": "dist/scenes/fixture/navigation/nav-data.json",
+      "bytes": 702,
+      "gzipBytes": 430
+    },
+    {
+      "path": "dist/scenes/fixture/quality/report.json",
+      "bytes": 980,
+      "gzipBytes": 474
+    },
+    {
+      "path": "dist/scenes/fixture/semantic/pois.json",
+      "bytes": 1421,
+      "gzipBytes": 492
+    },
+    {
+      "path": "dist/scenes/glb-fixture/manifest.json",
+      "bytes": 1293,
+      "gzipBytes": 710
+    },
+    {
+      "path": "dist/scenes/glb-fixture/navigation/nav-data.json",
+      "bytes": 702,
+      "gzipBytes": 430
+    },
+    {
+      "path": "dist/scenes/glb-fixture/quality/report.json",
+      "bytes": 1124,
+      "gzipBytes": 543
+    },
+    {
+      "path": "dist/scenes/glb-fixture/semantic/pois.json",
+      "bytes": 1257,
+      "gzipBytes": 478
+    },
+    {
+      "path": "dist/scenes/glb-fixture/visual/architectural-fixture.glb",
+      "bytes": 13556,
+      "gzipBytes": 1905
+    },
+    {
+      "path": "dist/scenes/splat-fixture/manifest.json",
+      "bytes": 2161,
+      "gzipBytes": 753
+    },
+    {
+      "path": "dist/scenes/splat-fixture/navigation/nav-data.json",
+      "bytes": 433,
+      "gzipBytes": 268
+    },
+    {
+      "path": "dist/scenes/splat-fixture/quality/report.json",
+      "bytes": 479,
+      "gzipBytes": 225
+    },
+    {
+      "path": "dist/scenes/splat-fixture/semantic/pois.json",
+      "bytes": 256,
+      "gzipBytes": 190
+    },
+    {
+      "path": "dist/scenes/splat-fixture/visual/synthetic_room.sog",
+      "bytes": 718570,
+      "gzipBytes": 711299
+    }
+  ],
+  "scopes": {
+    "initialJavaScript": {
+      "bytes": 46294,
+      "gzipBytes": 9664
+    },
+    "entryJavaScript": {
+      "path": "dist/assets/index-DV4EAHL-.js",
+      "gzipBytes": 144162
+    },
+    "lazyViewerJavaScript": {
+      "bytes": 2033336,
+      "gzipBytes": 521469
+    },
+    "generatedGlbFixture": {
+      "bytes": 13556,
+      "gzipBytes": 1905
+    }
+  },
+  "expectations": {
+    "entryGzipBudgetBytes": 368640,
+    "entryGzipBytes": 144162,
+    "entryBudgetMet": true,
+    "expectedLazyChunkLibraries": {
+      "fflate": [
+        "browser-Cgug2DPz.js"
+      ],
+      "gsap": [],
+      "idb": [
+        "index-V7xXUF1b.js"
+      ],
+      "playcanvas": [
+        "PlayCanvasViewer-BBGalIni.js"
+      ],
+      "qrcode-generator": [
+        "qrcode-5IewWFXk.js"
+      ],
+      "three": [
+        "three.module-Dljb2UHm.js"
+      ]
+    },
+    "notImportedExceptions": [
+      "gsap"
+    ]
+  },
+  "totalBytes": 4133160,
+  "totalGzipBytes": 1657802
+}

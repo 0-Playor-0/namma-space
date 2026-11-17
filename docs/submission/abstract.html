@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Namma Space: Technical Abstract</title>
+<style>
+  @page { size: A4; margin: 13mm 15mm 13mm 15mm; }
+  :root { --ink: #16181d; --muted: #555b66; --rule: #d5d9e0; --accent: #1f5fae; --soft: #f3f5f8; }
+  * { box-sizing: border-box; }
+  body { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; font-size: 9.6pt; line-height: 1.4; color: var(--ink); margin: 0; }
+  h1 { font-size: 16.5pt; margin: 0 0 2pt; letter-spacing: -0.2pt; }
+  h2 { font-size: 11pt; margin: 10pt 0 4pt; padding-bottom: 2pt; border-bottom: 1.2pt solid var(--accent); color: var(--accent); break-after: avoid; }
+  h3 { font-size: 9.7pt; margin: 5pt 0 1pt; break-after: avoid; }
+  p { margin: 0 0 4.5pt; }
+  table { width: 100%; border-collapse: collapse; margin: 3pt 0 5pt; font-size: 8.7pt; }
+  tr { break-inside: avoid; }
+  thead, tr:first-child { break-after: avoid; }
+  th, td { text-align: left; vertical-align: top; padding: 2.2pt 5pt; border-bottom: 0.6pt solid var(--rule); }
+  th { background: var(--soft); font-weight: 600; }
+  code { font-family: Menlo, Consolas, monospace; font-size: 8.3pt; background: var(--soft); padding: 0 2pt; border-radius: 2pt; }
+  .ph { background: #ffe94d; padding: 0 2pt; border-radius: 2pt; font-weight: 600; }
+  .meta { color: var(--muted); font-size: 9pt; margin-bottom: 5pt; }
+  .meta b { color: var(--ink); }
+  .summary { background: var(--soft); border-left: 3pt solid var(--accent); padding: 6pt 9pt; margin: 5pt 0 2pt; }
+  .fig { margin: 4pt 0 4pt; break-inside: avoid; }
+  .cap { font-size: 8.1pt; color: var(--muted); margin-top: 2pt; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 8pt; break-inside: avoid; }
+  .two img { width: 100%; height: 50mm; object-fit: cover; border: 0.6pt solid var(--rule); display: block; }
+  .note { font-size: 8.4pt; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<h1>Namma Space: Smartphone Video to a Walkable Photorealistic Indoor Twin</h1>
+<div class="meta">
+  <b>Team ID:</b> TM-12354C3F6F2 &nbsp;·&nbsp; <b>Institute:</b> Vellore Institute of Technology &nbsp;·&nbsp; <b>Round 1 Technical Abstract</b>, Techfest 2026-27, IIT Bombay<br>
+  <b>Members:</b> Nilesh Kumar Srivastava, Ojas Ashish Kulkarni, Ujesha Sivaramakrishnan, Ashwin Dandotiya<br>
+  The live viewer, repository, sample data, the original capture video and the demo video are linked in <i>Additional_Links_and_Prototypes.pdf</i>.
+</div>
+
+<div class="summary">
+  <b>Summary.</b> Namma Space turns ordinary phone video into a photorealistic 3D copy of an indoor space that anyone can walk through in a web browser. One person films a room by following a short capture procedure. Our pipeline then extracts sharp frames, recovers the camera path with COLMAP, masks out people who walked through, trains a 3D Gaussian Splatting model with Brush, removes artefacts and compresses the model for the web. It also derives a walkable floor grid and an estimated real-world scale from the camera path, so visitors cannot walk through walls or desks. The live site opens on a classroom we captured this way, rendered by a PlayCanvas viewer that runs in any modern browser with nothing to install.
+</div>
+
+<h2>1. Problem and scope</h2>
+<p>Imagine arriving at a large store, an exhibition hall or a festival venue for the first time. A floor plan tells you where the rooms are, but not what they look like, where the entrance you want actually is, or whether the stall you are looking for is behind that pillar. Photo tours show what a place looks like but cannot be explored freely. What a visitor really wants is to walk the space before they arrive.</p>
+<p>Our answer is a photorealistic digital twin that a non-expert can create with a phone and that anyone can explore in a browser. Round 1 delivers the core loop: capture a space, reconstruct it faithfully and roam it freely. We designed the capture procedure and the automated checks so that quality comes from following the process, not from manual 3D modelling. The same web app already contains groundwork for the later rounds: place search and shortest-path routing over the walkable grid for Round 2, and phone pairing for on-site capture in Round 3.</p>
+
+<h2>2. System architecture</h2>
+<p>We split the system into an offline reconstruction pipeline and a static web side. Reconstruction needs a GPU and takes hours, so it runs once per capture on one workstation. Viewing must be instant and work on any device, so the web side has no server code: the app and each scene are plain files on a static host. A scene travels as a self-contained bundle: a manifest, the compressed splat, the walkable grid, named places and a quality report. Publishing a new space is therefore a matter of adding one folder.</p>
+<div class="fig">
+<svg viewBox="0 0 760 200" width="100%" xmlns="http://www.w3.org/2000/svg" font-family="Helvetica Neue, Helvetica, Arial, sans-serif">
+  <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1f5fae"/></marker></defs>
+  <style>
+    .box { fill: #f3f5f8; stroke: #1f5fae; stroke-width: 1.2; }
+    .web { fill: #eaf3ea; stroke: #2f7d32; stroke-width: 1.2; }
+    .t { font-size: 11px; font-weight: 700; fill: #16181d; }
+    .s { font-size: 9.2px; fill: #555b66; }
+    .ln { stroke: #1f5fae; stroke-width: 1.4; fill: none; marker-end: url(#a); }
+    .lbl { font-size: 9.4px; font-weight: 700; fill: #1f5fae; letter-spacing: 0.6px; }
+  </style>
+  <text x="8" y="13" class="lbl">OFFLINE RECONSTRUCTION PIPELINE (one GPU workstation)</text>
+  <rect class="box" x="6" y="22" width="112" height="64" rx="6"/>
+  <text x="62" y="42" text-anchor="middle" class="t">Phone video</text>
+  <text x="62" y="57" text-anchor="middle" class="s">one take per room</text>
+  <text x="62" y="70" text-anchor="middle" class="s">filmed to the SOP</text>
+  <rect class="box" x="134" y="22" width="112" height="64" rx="6"/>
+  <text x="190" y="42" text-anchor="middle" class="t">Sharp frames</text>
+  <text x="190" y="57" text-anchor="middle" class="s">ffmpeg sampling</text>
+  <text x="190" y="70" text-anchor="middle" class="s">OpenCV blur filter</text>
+  <rect class="box" x="262" y="22" width="112" height="64" rx="6"/>
+  <text x="318" y="42" text-anchor="middle" class="t">Camera poses</text>
+  <text x="318" y="57" text-anchor="middle" class="s">COLMAP SfM</text>
+  <text x="318" y="70" text-anchor="middle" class="s">coverage check</text>
+  <rect class="box" x="390" y="22" width="112" height="64" rx="6"/>
+  <text x="446" y="42" text-anchor="middle" class="t">Splat training</text>
+  <text x="446" y="57" text-anchor="middle" class="s">people masked (YOLO)</text>
+  <text x="446" y="70" text-anchor="middle" class="s">Brush 3DGS</text>
+  <rect class="box" x="518" y="22" width="112" height="64" rx="6"/>
+  <text x="574" y="42" text-anchor="middle" class="t">Clean + compress</text>
+  <text x="574" y="57" text-anchor="middle" class="s">artefact removal</text>
+  <text x="574" y="70" text-anchor="middle" class="s">SOG under 50 MB</text>
+  <rect class="box" x="646" y="22" width="108" height="64" rx="6"/>
+  <text x="700" y="42" text-anchor="middle" class="t">Scene bundle</text>
+  <text x="700" y="57" text-anchor="middle" class="s">scale, floor grid,</text>
+  <text x="700" y="70" text-anchor="middle" class="s">start point, report</text>
+  <path class="ln" d="M118 54 H132"/><path class="ln" d="M246 54 H260"/><path class="ln" d="M374 54 H388"/><path class="ln" d="M502 54 H516"/><path class="ln" d="M630 54 H644"/>
+  <text x="380" y="102" text-anchor="middle" class="s">Every stage checks its output and records it in report.json; a person walks the result before it is published.</text>
+  <text x="8" y="128" class="lbl">STATIC DELIVERY (no server code, nothing to install)</text>
+  <rect class="web" x="540" y="138" width="214" height="56" rx="6"/>
+  <text x="647" y="159" text-anchor="middle" class="t">Static hosting</text>
+  <text x="647" y="174" text-anchor="middle" class="s">app + scene bundles on Vercel,</text>
+  <text x="647" y="186" text-anchor="middle" class="s">mirrored on GitHub Pages</text>
+  <rect class="web" x="262" y="138" width="246" height="56" rx="6"/>
+  <text x="385" y="159" text-anchor="middle" class="t">Web app: React + PlayCanvas</text>
+  <text x="385" y="174" text-anchor="middle" class="s">splat rendering, walkthrough with collision,</text>
+  <text x="385" y="186" text-anchor="middle" class="s">place search and routing</text>
+  <rect class="web" x="40" y="138" width="190" height="56" rx="6"/>
+  <text x="135" y="159" text-anchor="middle" class="t">Any WebGL2 browser</text>
+  <text x="135" y="174" text-anchor="middle" class="s">desktop or laptop</text>
+  <path class="ln" d="M700 86 V136"/>
+  <path class="ln" d="M540 166 H510"/>
+  <path class="ln" d="M262 166 H232"/>
+</svg>
+<div class="cap">Figure 1. End-to-end architecture. Heavy work runs offline on one workstation; the web side is a static site that loads one scene bundle per space.</div>
+</div>
+<p><b>Hardware.</b> Only one step needs an NVIDIA GPU: COLMAP's feature extraction and matching, for which we use its CUDA build. COLMAP can also run these steps on the CPU, more slowly. Brush trains through WebGPU, so training runs on any recent GPU. We built the live classroom on an RTX 5060 laptop. Viewing needs only a browser with WebGL2.</p>
+
+<h2>3. Capture procedure (SOP)</h2>
+<p>Reconstruction quality is decided at capture time. A blurred or badly lit video cannot be repaired later, so we wrote the procedure around the assumptions the algorithms make: one unchanging camera, a static scene, and every surface seen many times from different positions. Each rule protects one of those assumptions.</p>
+<table>
+  <tr><th style="width:31%">Rule</th><th>Why it matters</th></tr>
+  <tr><td><b>Fix the camera:</b> lock exposure and focus, use the 1x lens without zoom, turn stabilisation and HDR off, change nothing mid-clip</td><td>Structure-from-motion models one camera with fixed optics. Zoom, digital stabilisation and focus hunting quietly change that camera and bend straight walls. Changing brightness confuses feature matching and bakes flicker into the model's colours.</td></tr>
+  <tr><td><b>Move slowly:</b> about 0.5 m/s, pan no faster than about 20° per second, never spin in place</td><td>Motion blur is the most common reason a reconstruction fails. At our default sampling of 3 frames per second, this pace puts frames about 17 cm apart: dense overlap with little blur.</td></tr>
+  <tr><td><b>Cover everything twice:</b> walk the perimeter facing slightly into the wall, make two passes through the middle, pan slowly at corners, arc around large furniture, cross doorways both ways and finish where you started</td><td>Each surface must appear in at least three frames from different positions to be placed accurately and coloured correctly from every angle. Returning to the start closes the loop so drift can be corrected, and two-way doorway crossings keep adjoining rooms connected.</td></tr>
+  <tr><td><b>Light it evenly:</b> all lights on, curtains open, no direct sun beams and no flash</td><td>Consistent lighting gives consistent colour across views. Blown highlights and moving flash shadows end up permanently painted into the model.</td></tr>
+  <tr><td><b>Avoid what cannot be reconstructed:</b> mirrors, glass, windows, plain white walls; keep people out of shot where possible</td><td>Reflections and transparency break the static-scene assumption and leave floating artefacts. Blank walls give the feature matcher nothing to hold, so we keep edges, switches or posters in frame. People who do walk through are masked out by the pipeline.</td></tr>
+  <tr><td><b>Film long enough:</b> at least 31 s per room, ideally 60 to 180 s, landscape, 1080p or 4K at 30 fps</td><td>We need at least 80 sharp frames. At 3 frames per second, 31 s yields 93 frames, and discarding the blurriest 15 % leaves exactly 80. The pipeline applies this rule to the clip's real length before doing any work.</td></tr>
+</table>
+<p>Right after the camera poses are solved, the pipeline maps which parts of the room were seen and writes a re-film list, such as "stand here, face the ceiling", while the phone is still at hand.</p>
+
+<h2>4. Pipeline design</h2>
+<p>We built the pipeline to fail early and loudly rather than produce a poor model quietly. Each stage checks its own output, a run moves forward only when the checks pass, and finished stages are kept so a failed run resumes where it stopped.</p>
+<p><b>Frames.</b> We sample the video at 3 frames per second by default and keep the full 1080p width (1,920 pixels). OpenCV scores each frame's sharpness with the variance of its Laplacian and we discard the blurriest 15 %. A fixed share adapts to each video's overall sharpness, so no threshold needs tuning. Validation applies the same frame rule to the clip before any work starts.</p>
+<p><b>Camera poses and coverage.</b> COLMAP finds SIFT features, matches neighbouring frames and solves for every camera position and a sparse point cloud, treating the clip as one camera with fixed optics. If too few frames are placed, the pipeline retries with exhaustive matching, which our classroom needed. A run continues only if at least 60 % of frames are placed and the point cloud is dense enough; below 90 % it warns, and 90 % is our bar for publishing. A coverage map from the same points reports unseen parts of the room.</p>
+<p><b>People masking.</b> A YOLOv8 segmentation model finds people in every frame. We widen each mask by 45 pixels and tell Brush to ignore those pixels during training, so passers-by leave no ghosts while the furniture behind them is still learned from other frames.</p>
+<p><b>Training and cleanup.</b> Brush trains a Gaussian Splatting model for 30,000 steps with light regularisation and a cap of 1.5 million splats, which removed the floating fog of our first run. A trained model is reused only if the trainer, step count and camera solution are unchanged, and the dataset is checked so Brush cannot silently train on fewer views. Cleanup then shortens needle-shaped splats, drops nearly transparent ones, and removes splats outside the room or on the path the phone travelled, where nothing solid can be.</p>
+<p><b>Compression.</b> A raw room splat runs to hundreds of megabytes. We convert it to the SOG format with splat-transform against a 50 MB budget, first dropping higher-order colour detail and then thinning splats only if needed, with fallbacks to CPU encoding and the SPZ format. The full-quality file stays on the workstation as the master copy.</p>
+<p><b>Scene bundle and sign-off.</b> COLMAP's units are arbitrary, so the pipeline levels the floor from the camera poses and estimates metric scale by assuming the phone was held 1.45 m above the floor, recorded in the bundle as an estimate. It writes a 10 cm walkable grid: cells with points between knee and head height are blocked with 25 cm clearance, cells the camera walked through are always free, and cells more than 0.75 m from the filmed path are closed off because the splat is unreliable there. The start point is a real camera position. A person then walks the scene and approves it with a note; automated checks prove a file is well formed, but whether it looks right is a human judgement.</p>
+
+<h2>5. Web viewer</h2>
+<p>We render Gaussian splats rather than a textured mesh because splats reproduce what makes a room look real: soft lighting, glossy surfaces that change with viewpoint, and thin or cluttered objects that photogrammetry meshes blur or break. The cost is that a splat has no surface for collision, which our walkable grid supplies.</p>
+<p>The web app is built with React and the PlayCanvas engine, which renders SOG splats natively. Visitors click <b>Enter walkthrough</b>, look around with the mouse and walk with W, A, S and D or the arrow keys; F toggles full screen and Escape releases the mouse. Movement slides along walls and desks instead of passing through them. Because a splat streaks when seen from directions nobody filmed, the viewer limits looking up or down to 35° and eases the view back toward filmed directions. A search box finds named places and the app can plot a route to them over the same grid.</p>
+<p><b>Loading.</b> The app checks each splat's SHA-256 digest against the scene manifest, hands the verified bytes straight to the renderer so the file is downloaded only once, retries once if the connection drops, and explains any failure in plain language. The app and its scene bundles are served as static files from Vercel, with a GitHub Pages mirror.</p>
+
+<h2>6. Results</h2>
+<p>The live site opens on a classroom we filmed in one 180-second, 1080p take. The table gives the run behind it, as recorded in our run logs, and our measurements of the deployed viewer.</p>
+<table>
+  <tr><th>Metric</th><th>Value</th><th>Metric</th><th>Value</th></tr>
+  <tr><td>Frames used</td><td>918, sampled at 6 per second</td><td>Splats in the published model</td><td>1,457,345</td></tr>
+  <tr><td>COLMAP registration</td><td>895 of 918 frames (97.5 %), 0.90 px reprojection error</td><td>Published file</td><td>23.1 MB, SOG</td></tr>
+  <tr><td>Processing time</td><td>COLMAP 4.2 h with exhaustive matching; training 7.9 h on a thermally throttled RTX 5060 laptop</td><td>Room size (estimated scale)</td><td>about 12.0 × 12.2 m, 2.7 m high</td></tr>
+  <tr><td>Load time, desktop (measured)</td><td>5.7 to 9.9 s to a walkable scene, three fresh sessions, Chrome on an Apple M1 laptop over home broadband</td><td>Frame rate (measured)</td><td>24 to 41 fps, same laptop, 1440 × 900 window</td></tr>
+</table>
+<div class="two">
+  <div><img src="figures/classroom_spawn.jpg" alt="Classroom from the start point"><div class="cap">Figure 2. The classroom from the start point, as a visitor first sees it on the live site.</div></div>
+  <div><img src="figures/classroom_walk.jpg" alt="Classroom after walking forward"><div class="cap">Figure 3. After walking about 2.5 m into the room: desks, shelves and windows stay sharp along the filmed path.</div></div>
+</div>
+<p class="note">Our first run on the same video, at 2 frames per second, placed 287 of 306 frames (94 %) and trained in 40 minutes on the same laptop. The denser 6 fps run is cleaner near the start point. Phone load times were not measured; at 20 Mbit/s, the 23 MB file alone takes about 9 s to download (estimate).</p>
+
+<h2>7. Limitations and next steps</h2>
+<p><b>Known artefacts.</b> The ceiling was rarely filmed, so it looks foggy, and low views among the desks streak. Both point to a recapture with a ceiling pass rather than more frames: the 6 fps rerun did not fix the low views. Mirrors, glass and blank walls remain hard.</p>
+<p><b>Scale and collision.</b> Scale is estimated from the assumed camera height, which we expect to be within about 15 %, until a measured distance or a printed marker is added. The walkable grid comes from sparse points, so it is conservative near plain walls.</p>
+<p><b>Scaling to larger venues (plan).</b> For a building such as IIT Bombay's Lecture Hall Complex, we would treat each room or corridor segment as its own capture, processed independently across several workstations. Doorway crossings filmed both ways give neighbouring captures shared views, which we would use to register them into one coordinate frame. The viewer would then stream nearby rooms on demand instead of one file. Our classroom took about 12 hours on one throttled laptop at 6 fps, against 40 minutes of training at 2 fps. So for a venue we would capture at 2 to 3 fps, use vocabulary-tree matching instead of exhaustive matching, and train on desktop GPUs. None of this is built yet; Round 1 targets one room at a time.</p>
+<p><b>Rounds 2 and 3.</b> Place search and routing already run on the walkable grid; Round 2 adds named places for real venues and multi-room routes. Round 3 builds on the phone-pairing prototype in the app for on-site capture, plus optional AR navigation.</p>
+
+<h2>8. Open-source credits and datasets</h2>
+<table>
+  <tr><th style="width:25%">Tool, model or dataset</th><th>Use in Namma Space</th><th style="width:23%">Licence</th></tr>
+  <tr><td>COLMAP 4.2.1</td><td>feature extraction, matching, structure-from-motion, undistortion</td><td>BSD-3-Clause</td></tr>
+  <tr><td>Brush 0.3.0</td><td>Gaussian Splatting training</td><td>Apache-2.0</td></tr>
+  <tr><td>Ultralytics YOLOv8 (yolov8m-seg)</td><td>people segmentation for training masks (offline only)</td><td>AGPL-3.0</td></tr>
+  <tr><td>FFmpeg and ffprobe</td><td>frame sampling, video inspection</td><td>LGPL-2.1+ (GPL-2.0+ for GPL builds)</td></tr>
+  <tr><td>OpenCV, NumPy, SciPy</td><td>blur scoring, splat validation, coverage and floor-grid computation</td><td>Apache-2.0; BSD-3-Clause; BSD-3-Clause</td></tr>
+  <tr><td>@playcanvas/splat-transform 3.10.3</td><td>conversion to SOG, alignment transform, colour-detail reduction</td><td>MIT</td></tr>
+  <tr><td>PlayCanvas engine 2.23</td><td>live viewer: splat rendering, camera, input</td><td>MIT</td></tr>
+  <tr><td>React 19, Vite 7, TypeScript 5.9</td><td>web app and build</td><td>MIT; TypeScript Apache-2.0</td></tr>
+  <tr><td>zod, fflate, idb, ws, qrcode-generator</td><td>scene validation, bundle export, browser storage, development pairing relay, QR codes</td><td>MIT (idb: ISC)</td></tr>
+  <tr><td>GSAP 3</td><td>interface animation</td><td>GSAP Standard no-charge licence (not OSI-approved)</td></tr>
+  <tr><td>Archivo, IBM Plex Mono</td><td>typography</td><td>SIL OFL-1.1</td></tr>
+  <tr><td>Vitest, Playwright, ESLint</td><td>tests and linting</td><td>MIT; Playwright Apache-2.0</td></tr>
+  <tr><td>Spark 2.4, three.js, react-three-fiber</td><td>our earlier viewer (<code>viewer/</code>), kept in the repository</td><td>MIT</td></tr>
+  <tr><td>Node.js 22+</td><td>build tooling, runs splat-transform</td><td>MIT</td></tr>
+  <tr><td><b>Dataset:</b> Eyeful Tower "apartment", Meta Platforms</td><td>external benchmark scene on the live site, clearly labelled; splat trained by us</td><td>MIT (Meta's notice ships with the scene)</td></tr>
+  <tr><td><b>Data:</b> classroom and workshop-room captures</td><td>our own phone video and photos</td><td>ours</td></tr>
+</table>
+<p class="note">Hosting services, not open source: Vercel and GitHub Pages.</p>
+
+</body>
+</html>

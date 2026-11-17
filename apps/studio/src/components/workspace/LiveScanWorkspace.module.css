@@ -1,0 +1,104 @@
+.stub {
+  display: grid;
+  place-items: center;
+  min-height: 60vh;
+  padding: var(--space-4);
+}
+
+/* In-layout variant: `.layout` already owns padding + min-height. */
+.stubBare {
+  padding: 0;
+  min-height: 0;
+}
+
+/* §6.2: Live Scan splits into the camera area + a 400 px pairing rail. */
+.layout {
+  display: grid;
+  grid-template-columns: 1fr 400px;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  min-height: 60vh;
+}
+
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* Main column: camera/frames stack above their controls. */
+.stage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.captureRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+/* Real progress only — chunk counts come from the frame-ack tracker. */
+.progress {
+  font: var(--text-meta);
+  color: var(--text-dim);
+}
+
+.hint {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--text-dim);
+}
+
+.failure {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--error);
+}
+
+/* Received-frames summary + Capture Studio handoff. */
+.frames {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.framesTitle {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.framesNote {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--text-dim);
+}
+
+.handoff {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: var(--border-strong);
+  border-radius: var(--radius-2);
+  color: var(--text);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.handoff:hover {
+  border-color: var(--accent-lime);
+}
+
+@media (max-width: 1024px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}

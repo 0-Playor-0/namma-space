@@ -1,0 +1,48 @@
+# Python virtual environment
+/.venv/
+
+# Work / capture data (raw photos, COLMAP databases, etc.)
+/work/
+
+# Local tooling binaries
+/tools/
+
+# Tests
+/tests/
+
+# Docs / submission artifacts
+/docs/
+
+# Pipeline scripts and notebooks (not needed for web build)
+/pipeline/
+/notebooks/
+/scripts/
+
+# Node modules
+node_modules/
+apps/studio/node_modules/
+
+# Root-level dist (stale; Vercel builds apps/studio/dist fresh)
+/dist/
+
+# Vercel project metadata & secrets
+.vercel/
+.env.local
+.env.*
+
+# Python / pytest cache
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# macOS
+.DS_Store
+
+# Misc large dev files
+*.tar.xz
+*.tar.gz
+*.zip
+*.db
+*.sqlite
+*.mp4
+*.mov
