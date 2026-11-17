@@ -1,0 +1,76 @@
+{
+ "schemaVersion": 1,
+ "sceneId": "hostel",
+ "displayName": "Hostel",
+ "sceneKind": "reconstructed-capture",
+ "description": "Gaussian splat reconstructed from a smartphone video (COLMAP + Gaussian-splat training).",
+ "coordinateSystem": "right-handed-y-up",
+ "units": "metre",
+ "worldFromReconstruction": [
+  [
+   1,
+   0,
+   0,
+   0
+  ],
+  [
+   0,
+   1,
+   0,
+   0
+  ],
+  [
+   0,
+   0,
+   1,
+   0
+  ],
+  [
+   0,
+   0,
+   0,
+   1
+  ]
+ ],
+ "bounds": {
+  "min": [
+   -5.791,
+   0.0,
+   -4.615
+  ],
+  "max": [
+   10.375,
+   2.492,
+   10.444
+  ]
+ },
+ "startPosition": [
+  0.159,
+  1.45,
+  -2.465
+ ],
+ "startYawDegrees": 135.0,
+ "visualAssets": [
+  {
+   "kind": "ply",
+   "uri": "visual/scene.compressed.ply",
+   "label": "Hostel",
+   "sha256": "02106e241971328493d6ab99939e3f8748b67ed18072a60e7ff8d248040b7513"
+  }
+ ],
+ "collisionAsset": null,
+ "navigationUri": "navigation/grid.json",
+ "semanticUri": "semantic/pois.json",
+ "qualityUri": "quality/report.json",
+ "scaleStatus": "estimated",
+ "provenance": {
+  "pipeline": "pipeline/scene_bundle.py",
+  "pipelineVersion": "0.1.0",
+  "capturedAt": "",
+  "source": "Smartphone video capture",
+  "notes": [
+   "Scale is estimated from an assumed 1.45 m camera height (room height comes out at 2.43 m).",
+   "Reconstruction-to-world transform (scale 0.4969) baked into the splat by scene_bundle.bake_ply, so worldFromReconstruction is identity."
+  ]
+ }
+}

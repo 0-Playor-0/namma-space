@@ -1,5 +1,6 @@
 """Scene bundle for the studio viewer: estimated scale and navigation grid on a synthetic room."""
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -173,3 +174,85 @@ def test_navgrid_png_and_quality_numbers(tmp_path):
     keys = {"walkable_m2", "components", "spawn_component_m2", "unknown_m2"}
     assert keys <= set(q["measured"]) and keys <= set(stats)
     assert 0 < q["measured"]["spawn_component_m2"] <= q["measured"]["walkable_m2"]
+
+
+# ------------------------------------------------------------------ spawn and pose outliers
+def _walk(n, start, step=(0.1, 0.0)):
+    return np.array([[start[0] + i * step[0], 1.4, start[1] + i * step[1]] for i in range(n)])
+
+
+def test_spawn_goes_to_largest_component_near_the_path_facing_open_space():
+    # A 0.3 m island (where a mis-posed first frame would put the spawn) and a 3 m x 1 m room; one camera
+    # stood in the island and one in the room's west end. The room is the largest component.
+    rows = ["???????????????????????????????????",
+            "?...?#..............................",
+            "?...?#..............................",
+            "?...?#..............................",
+            "?????#..............................",
+            "?????#..............................",
+            "?????#..............................",
+            "?????#..............................",
+            "?????#..............................",
+            "?????#..............................",
+            "?????#..............................",
+            "???????????????????????????????????"]
+    nav = _grid([r.ljust(36, "?") for r in rows], start=(2, 2))
+    cams = np.array([[0.25, 0.25], [0.75, 0.55]])  # (x, z) metres: island cell (2, 2), room cell (7, 5)
+    sp = scene_bundle.choose_spawn(nav, cams)
+    assert (sp["x"], sp["z"]) == (7, 5)  # the only camera cell in the big room
+    nav["start"] = {"x": sp["x"], "z": sp["z"]}
+    st = scene_bundle.grid_stats(nav)
+    assert st["components"] == 2 and st["spawn_component_m2"] > 2.5
+    # Facing the long axis of the room (+x): forward = (-sin yaw, -cos yaw) points along +x.
+    assert -math.sin(sp["yaw"]) > 0.9
+    # Without camera positions it still lands in the big room, on its roomiest cell.
+    sp2 = scene_bundle.choose_spawn(nav)
+    assert sp2["x"] >= 6 and 3 <= sp2["z"] <= 8
+
+
+def test_pose_jumps_are_outliers_and_seed_no_walkable_cells():
+    # 3 mis-posed frames 6 m away, then a 60-frame walk with one 4 m jump in the middle (a teleport between two
+    # real stretches). The 3 frames are outliers; the jump is not walked, so the wall it crosses stays blocked.
+    bad = _walk(3, (-6.0, 0.0))
+    a = _walk(30, (0.0, 0.0))                      # x 0 .. 2.9, z 0
+    b = _walk(30, (0.0, 2.0))                      # x 0 .. 2.9, z 2
+    C = np.concatenate([bad, a, b])                # (2.9, 0) -> (0, 2): a 3.5 m jump through the wall at z = 1
+    outlier, jump = scene_bundle.pose_outliers(C)
+    assert outlier[:3].all() and not outlier[3:].any()
+    assert jump[2] and jump[32] and jump.sum() == 2
+
+    wall = np.array([[x, 1.0, z] for x in np.arange(-7, 4, 0.03) for z in (0.95, 1.0, 1.05) for _ in range(2)])
+    lo, hi = np.array([-7.0, 0, -0.6]), np.array([4.0, 2.2, 2.6])
+    nav = scene_bundle.navigation_grid(wall, C, lo, hi)
+    occ = ~scene_bundle.walkable_mask(nav)
+    cell = lambda x, z: (int((z - lo[2]) / 0.1), int((x - lo[0]) / 0.1))
+    assert occ[cell(1.45, 1.0)]                    # the jump's midpoint is still wall
+    assert occ[cell(-5.9, 0.0)]                    # the outlier frames seed nothing
+    assert not occ[cell(1.0, 0.0)] and not occ[cell(1.0, 2.0)]
+    s = nav["start"]
+    assert not occ[s["z"], s["x"]] and s["x"] >= cell(0.0, 0.0)[1]
+
+
+def test_respawn_moves_an_island_spawn_into_the_main_area(tmp_path):
+    model = write_model(tmp_path / "m", 0.3, n_cams=96)
+    splat = tmp_path / "scene.sog"
+    splat.write_bytes(b"not a real splat")
+    scene_bundle.build(model, splat, tmp_path / "bundle", "Synthetic")
+    grid_path = tmp_path / "bundle" / "navigation" / "grid.json"
+    nav = json.loads(grid_path.read_text())
+    walk = scene_bundle.walkable_mask(nav)
+    # carve an island: free a cell surrounded by unknown in a corner and put the spawn there
+    unknown = set(nav["unknown"])
+    idx = 1 * nav["width"] + 1
+    unknown.discard(idx)
+    nav["blocked"] = [i for i in nav["blocked"] if i != idx]
+    nav["unknown"] = sorted(unknown)
+    nav["start"] = {"x": 1, "z": 1}
+    grid_path.write_text(json.dumps(nav))
+    assert not walk[1, 1]
+    r = scene_bundle.respawn(tmp_path / "bundle")
+    assert r["before"]["spawn_component_m2"] == 0.01
+    assert r["after"]["spawn_component_m2"] == r["after"]["walkable_m2"] - 0.01  # all but the island
+    manifest = json.loads((tmp_path / "bundle" / "manifest.json").read_text())
+    pois = json.loads((tmp_path / "bundle" / "semantic" / "pois.json").read_text())
+    assert manifest["startPosition"] == pois[0]["position"]

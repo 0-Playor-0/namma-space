@@ -21,6 +21,7 @@ already be in the bundle's world frame (levelled, metres, floor at y=0): world_a
 transform and bake_ply() applies it to the float PLY (positions, scales, rotations and the SH colour
 coefficients) before compression; build() writes identity. run_pipeline does this; by hand:
     python pipeline/scene_bundle.py --bake <sparse_dir> splat_clean.ply splat_world.ply
+To re-pick only the spawn of an existing bundle (no model needed): scene_bundle.py --respawn - - <bundle_dir>
 
 Views. For each walkable cell the grid also lists which way the phone faced from nearby (a bitmask of
 VIEW_SECTORS compass sectors). With ?guide=1 the viewer turns the visitor gently back when they rest looking
@@ -39,7 +40,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from room_coverage import level_rotation, load_model, viewer_alignment  # noqa: E402
+from room_coverage import level_rotation, load_model  # noqa: E402
 
 ASSUMED_CAMERA_HEIGHT_M = 1.45  # phone held at chest height while walking
 CELL_M = 0.10                   # navigation grid resolution
@@ -54,6 +55,17 @@ WALKED_RADIUS_M = 0.2           # cells this close to a camera position are alwa
 VIEW_SECTORS = 16               # compass sectors (22.5 degrees) for the per-cell filmed directions
 VIEW_RADIUS_M = 1.0             # a camera within this distance counts as a view from the cell
 MIN_VIEW_FRAMES = 3             # frames a sector needs to count as filmed (one or two glances still streak)
+# Pose outliers. A phone walked at ~1 m/s and sampled at 2-3 fps moves 0.1-0.4 m per frame; a step of many times
+# the median is SfM placing a frame in the wrong spot (often the first few frames, before the map has context),
+# drawn on the nav grid as a long straight line through furniture. Such a step is never "walked"; and a stretch of
+# the walk cut off by jumps on both sides that holds only a few frames is treated as mis-posed and not used to
+# seed walkable cells, the view masks or the spawn.
+JUMP_FACTOR = 8.0               # a step this many times the median step is a jump...
+JUMP_MIN_M = 0.5                # ...if it is also at least this long
+MIN_RUN_FRAMES = 10             # runs between jumps shorter than max(this, MIN_RUN_FRACTION of frames) are outliers
+MIN_RUN_FRACTION = 0.05
+SPAWN_RAYS = 32                 # directions tried for the spawn's facing
+SPAWN_RAY_MAX_M = 8.0
 
 
 def estimate_scale(P: np.ndarray, C: np.ndarray) -> tuple[float, float, float]:
@@ -86,10 +98,96 @@ def view_masks(Cw: np.ndarray, Fw: np.ndarray, lo: np.ndarray, w: int, h: int) -
     return ((counts >= MIN_VIEW_FRAMES) * (1 << np.arange(VIEW_SECTORS))[:, None, None]).sum(0)
 
 
-def navigation_grid(W: np.ndarray, Cw: np.ndarray, lo: np.ndarray, hi: np.ndarray, start: np.ndarray,
-                    Fw: np.ndarray | None = None) -> dict:
-    """W, Cw: points and camera centres in world metres (floor at y=0); Fw: camera forward directions."""
+def pose_outliers(Cw: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Cameras in capture order -> (outlier per camera, jump per consecutive step). See JUMP_FACTOR."""
+    n = len(Cw)
+    if n < 3:
+        return np.zeros(n, bool), np.zeros(max(n - 1, 0), bool)
+    step = np.linalg.norm(np.diff(Cw[:, [0, 2]], axis=0), axis=1)
+    jump = step > max(JUMP_FACTOR * float(np.median(step)), JUMP_MIN_M)
+    run = np.concatenate([[0], np.cumsum(jump)])
+    size = np.bincount(run)
+    keep = size >= max(MIN_RUN_FRAMES, MIN_RUN_FRACTION * n)
+    if not keep.any():
+        keep = size == size.max()
+    return ~keep[run], jump
+
+
+def walkable_mask(nav: dict) -> np.ndarray:
+    w, h = nav["width"], nav["height"]
+    occ = np.zeros(w * h, bool)
+    occ[nav["blocked"]] = True
+    occ[nav["unknown"]] = True
+    return ~occ.reshape(h, w)
+
+
+def _ray_lengths(walkable: np.ndarray, x: int, z: int, cell: float) -> np.ndarray:
+    """Free distance (m) from cell (x, z) through walkable cells along SPAWN_RAYS headings; heading k is
+    direction (sin a, cos a) in (x, z) with a = 2 pi k / SPAWN_RAYS, i.e. compass heading atan2(dx, dz)."""
+    h, w = walkable.shape
+    a = 2 * math.pi * np.arange(SPAWN_RAYS) / SPAWN_RAYS
+    t = np.arange(1, int(SPAWN_RAY_MAX_M / cell * 2) + 1) * 0.5  # half-cell steps
+    xs = np.floor(x + 0.5 + np.sin(a)[:, None] * t).astype(int)
+    zs = np.floor(z + 0.5 + np.cos(a)[:, None] * t).astype(int)
+    inside = (xs >= 0) & (xs < w) & (zs >= 0) & (zs < h)
+    free = inside & walkable[np.clip(zs, 0, h - 1), np.clip(xs, 0, w - 1)]
+    first_block = np.where(free.all(1), len(t), np.argmin(free, axis=1))
+    return np.where(first_block > 0, t[np.maximum(first_block - 1, 0)], 0.0) * cell
+
+
+def choose_spawn(nav: dict, cameras_xz: np.ndarray | None = None) -> dict:
+    """Spawn cell and yaw: in the LARGEST walkable component (4-neighbour, as grid_stats and the route planner),
+    on a cell a (non-outlier) camera stood in when there is one there (else one filmed from, else any), preferring
+    room around it, facing the longest free line of sight (a filmed direction when one is nearly as long).
+    Returns {"x", "z", "yaw"}: yaw in radians, the manifest's convention (forward = (-sin yaw, -cos yaw))."""
     from scipy import ndimage
+
+    walkable = walkable_mask(nav)
+    h, w, c = nav["height"], nav["width"], nav["cellSize"]
+    labels, n = ndimage.label(walkable)
+    if n == 0:
+        raise ValueError("navigation grid has no walkable cell to spawn on")
+    biggest = 1 + int(np.argmax(np.bincount(labels.ravel())[1:]))
+    region = labels == biggest
+    cand = np.zeros_like(region)
+    if cameras_xz is not None and len(cameras_xz):
+        ij = np.floor((np.asarray(cameras_xz) - [nav["origin"]["x"], nav["origin"]["z"]]) / c).astype(int)
+        ok = (ij[:, 0] >= 0) & (ij[:, 0] < w) & (ij[:, 1] >= 0) & (ij[:, 1] < h)
+        cand[ij[ok, 1], ij[ok, 0]] = True
+        cand &= region
+    views = np.asarray(nav["views"]).reshape(h, w) if "views" in nav else None
+    if not cand.any() and views is not None:
+        cand = region & (views > 0)
+    if not cand.any():
+        cand = region
+    clear = ndimage.distance_transform_edt(np.pad(walkable, 1))[1:-1, 1:-1] * c  # metres to the nearest wall
+    zz, xx = np.nonzero(cand)
+    order = np.argsort(-clear[zz, xx], kind="stable")[:64]  # rays only for the roomiest candidates
+    best = None
+    for k in order:
+        x, z = int(xx[k]), int(zz[k])
+        rays = _ray_lengths(walkable, x, z, c)
+        score = min(clear[z, x], 1.0) + 0.2 * rays.max()
+        if best is None or score > best[0]:
+            best = (score, x, z, rays)
+    _, x, z, rays = best
+    d = int(np.argmax(rays))
+    if views is not None and views[z, x]:
+        sectors = nav.get("viewSectors", VIEW_SECTORS)
+        filmed = np.array([(views[z, x] >> int(k * sectors / SPAWN_RAYS)) & 1 for k in range(SPAWN_RAYS)], bool)
+        if filmed.any() and rays[filmed].max() >= 0.6 * rays.max():
+            d = int(np.flatnonzero(filmed)[np.argmax(rays[filmed])])
+    a = 2 * math.pi * d / SPAWN_RAYS  # forward (sin a, cos a) = (-sin yaw, -cos yaw)
+    return {"x": x, "z": z, "yaw": math.atan2(-math.sin(a), -math.cos(a))}
+
+
+def navigation_grid(W: np.ndarray, Cw: np.ndarray, lo: np.ndarray, hi: np.ndarray, start: np.ndarray | None = None,
+                    Fw: np.ndarray | None = None) -> dict:
+    """W, Cw: points and camera centres (capture order) in world metres (floor at y=0); Fw: camera forward
+    directions. Outlier poses (pose_outliers) seed nothing. With start None the spawn is choose_spawn's."""
+    from scipy import ndimage
+
+    outlier, jump = pose_outliers(Cw)
 
     w = int(math.ceil((hi[0] - lo[0]) / CELL_M))
     h = int(math.ceil((hi[2] - lo[2]) / CELL_M))
@@ -106,12 +204,15 @@ def navigation_grid(W: np.ndarray, Cw: np.ndarray, lo: np.ndarray, hi: np.ndarra
     blocked = ndimage.binary_dilation(count >= MIN_POINTS, _disk(round(CLEARANCE_M / CELL_M)))
 
     walked = np.zeros((h, w), bool)
-    ij = cells(Cw[:, [0, 2]])
+    ij = cells(Cw[~outlier][:, [0, 2]])
     walked[ij[:, 1], ij[:, 0]] = True
     filmed = ndimage.binary_dilation(walked, _disk(round(FILMED_RADIUS_M / CELL_M)))
     walked = ndimage.binary_dilation(walked, _disk(round(WALKED_RADIUS_M / CELL_M)))
-    # Consecutive camera positions are walked ground too, even when the gap between them is > 1 cell.
-    for a, b in zip(Cw[:-1], Cw[1:]):
+    # Consecutive camera positions are walked ground too, even when the gap between them is > 1 cell; but not
+    # across a jump or to/from an outlier pose (that line was never walked and may cross furniture).
+    for k, (a, b) in enumerate(zip(Cw[:-1], Cw[1:])):
+        if jump[k] or outlier[k] or outlier[k + 1]:
+            continue
         for t in np.linspace(0, 1, max(2, int(np.linalg.norm((b - a)[[0, 2]]) / (CELL_M / 2)))):
             p = cells((a + (b - a) * t)[None, [0, 2]])
             if len(p):
@@ -119,17 +220,22 @@ def navigation_grid(W: np.ndarray, Cw: np.ndarray, lo: np.ndarray, hi: np.ndarra
 
     blocked &= ~walked
     unknown = ~filmed & ~blocked
-    sx, sz = cells(start[None, [0, 2]])[0]
     flat = lambda m: np.flatnonzero(m.ravel()).tolist()  # index = z * width + x
     grid = {"version": 1, "coordinateSystem": "x-z-grid",
             "origin": {"x": round(float(lo[0]), 3), "z": round(float(lo[2]), 3)},
             "cellSize": CELL_M, "width": w, "height": h,
             "blocked": flat(blocked), "unknown": flat(unknown),
-            "start": {"x": int(sx), "z": int(sz)}, "clearanceMetres": CLEARANCE_M}
+            "start": {"x": 0, "z": 0}, "clearanceMetres": CLEARANCE_M}
     if Fw is not None:
-        views = view_masks(Cw, Fw, lo, w, h)
+        views = view_masks(Cw[~outlier], Fw[~outlier], lo, w, h)
         views[blocked | unknown] = 0
         grid.update(viewSectors=VIEW_SECTORS, views=views.ravel().tolist())
+    if start is None:
+        sp = choose_spawn(grid, Cw[~outlier][:, [0, 2]])
+        grid["start"] = {"x": sp["x"], "z": sp["z"]}
+    else:
+        sx, sz = cells(start[None, [0, 2]])[0]
+        grid["start"] = {"x": int(sx), "z": int(sz)}
     return grid
 
 
@@ -189,6 +295,44 @@ def navgrid_png(nav: dict, cameras_xz: np.ndarray, path: Path) -> None:
         x += 24 + 8 * len(name) + 10
     path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(path), cv2.cvtColor(canvas, cv2.COLOR_RGB2BGR))
+
+
+def spawn_position(nav: dict, sp: dict) -> np.ndarray:
+    """World position of a spawn cell's centre, eye at the height the views were filmed from (sharpest there)."""
+    c = nav["cellSize"]
+    return np.array([nav["origin"]["x"] + (sp["x"] + 0.5) * c, ASSUMED_CAMERA_HEIGHT_M,
+                     nav["origin"]["z"] + (sp["z"] + 0.5) * c])
+
+
+def respawn(bundle: Path) -> dict:
+    """Re-pick the spawn of an existing bundle from its grid alone (no SfM model needed): updates the grid's
+    start, the manifest's startPosition/startYawDegrees, the "start" POI, the quality numbers and navgrid.png
+    (redrawn without the camera path, which the bundle does not store)."""
+    manifest = json.loads((bundle / "manifest.json").read_text())
+    nav_path = bundle / manifest["navigationUri"]
+    nav = json.loads(nav_path.read_text())
+    before = grid_stats(nav)
+    sp = choose_spawn(nav)
+    nav["start"] = {"x": sp["x"], "z": sp["z"]}
+    start = spawn_position(nav, sp).round(3).tolist()
+    nav_path.write_text(json.dumps(nav), encoding="utf-8")
+    manifest["startPosition"], manifest["startYawDegrees"] = start, round(math.degrees(sp["yaw"]), 2)
+    (bundle / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
+    poi_path = bundle / manifest["semanticUri"]
+    pois = json.loads(poi_path.read_text())
+    for p in pois:
+        if p.get("id") == "start":
+            p["position"] = p["approachPoint"] = start
+    poi_path.write_text(json.dumps(pois, indent=1), encoding="utf-8")
+    after = grid_stats(nav)
+    q_path = bundle / manifest["qualityUri"]
+    q = json.loads(q_path.read_text())
+    q.setdefault("measured", {}).update(after)
+    q_path.write_text(json.dumps(q, indent=1), encoding="utf-8")
+    navgrid_png(nav, np.zeros((0, 2)), bundle / "quality" / "navgrid.png")
+    print("before:", summary_line(before))
+    print("after: ", summary_line(after))
+    return {"before": before, "after": after, "start": start, "yaw_degrees": manifest["startYawDegrees"]}
 
 
 def summary_line(stats: dict) -> str:
@@ -316,10 +460,13 @@ def build(sparse: Path, splat: Path, out: Path, title: str, quality: dict | None
     # can stick out past the 1st/99th percentile of the points.
     lo[[0, 2]] = np.minimum(lo[[0, 2]], Cw[:, [0, 2]].min(0) - CELL_M)
     hi[[0, 2]] = np.maximum(hi[[0, 2]], Cw[:, [0, 2]].max(0) + CELL_M)
-    align = viewer_alignment(centres, axes)
-    start = Cw[align["spawn_image_index"]].copy()
-    start[1] = ASSUMED_CAMERA_HEIGHT_M  # eye at the height the views were filmed from: sharpest there
-    nav = navigation_grid(W, Cw, lo, hi, start, axes[:, 0] @ R.T)
+    # Spawn in the largest walkable component, on a cell the (non-outlier) cameras stood in, facing open space.
+    # (room_coverage.viewer_alignment's spawn ignores the grid: on the hostel capture it picked a mis-posed first
+    # frame in a 0.86 m2 island.)
+    outlier, _ = pose_outliers(Cw)
+    nav = navigation_grid(W, Cw, lo, hi, None, axes[:, 0] @ R.T)
+    sp = choose_spawn(nav, Cw[~outlier][:, [0, 2]])
+    start = spawn_position(nav, sp)
 
     out.mkdir(parents=True, exist_ok=True)
     for d in ("visual", "navigation", "semantic", "quality"):
@@ -356,7 +503,7 @@ def build(sparse: Path, splat: Path, out: Path, title: str, quality: dict | None
         "worldFromReconstruction": np.eye(4, dtype=int).tolist(),  # the splat is baked (see bake_ply)
         "bounds": {"min": lo.round(3).tolist(), "max": hi.round(3).tolist()},
         "startPosition": start.round(3).tolist(),
-        "startYawDegrees": round(math.degrees(align["spawnYaw"]), 2),
+        "startYawDegrees": round(math.degrees(sp["yaw"]), 2),
         "visualAssets": [{"kind": splat.suffix.lstrip("."), "uri": f"visual/{splat.name}", "label": title,
                           "sha256": hashlib.sha256(splat.read_bytes()).hexdigest()}],
         "collisionAsset": None, "navigationUri": "navigation/grid.json",
@@ -367,7 +514,7 @@ def build(sparse: Path, splat: Path, out: Path, title: str, quality: dict | None
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
     shutil.rmtree(out / "_sparse_txt", ignore_errors=True)
-    stats = {"metres_per_unit": round(s, 4), "room_height_m": round(room_h, 2),
+    stats = {"metres_per_unit": round(s, 4), "pose_outliers": int(outlier.sum()), "room_height_m": round(room_h, 2),
              "room_size_m": (hi - lo).round(2).tolist(), "grid": [nav["width"], nav["height"]],
              "blocked_cells": len(nav["blocked"]), "unknown_cells": len(nav["unknown"]), **nav_stats}
     print("scene_bundle:", json.dumps(stats))
@@ -382,10 +529,13 @@ if __name__ == "__main__":
     ap.add_argument("splat", type=Path, help="world-frame web splat (or, with --bake, the COLMAP-frame float PLY)")
     ap.add_argument("out", type=Path, help="bundle folder (or, with --bake, the world-frame PLY to write)")
     ap.add_argument("--bake", action="store_true")
+    ap.add_argument("--respawn", action="store_true", help="only re-pick the spawn of the existing bundle at <out>")
     ap.add_argument("--title", default="Captured room")
     ap.add_argument("--metres-per-unit", type=float, help="known model scale; skips the camera-height guess")
     a = ap.parse_args()
-    if a.bake:
+    if a.respawn:
+        respawn(a.out)
+    elif a.bake:
         al = world_alignment(a.sparse, a.out.parent / "_sparse_txt", a.metres_per_unit)
         shutil.rmtree(a.out.parent / "_sparse_txt", ignore_errors=True)
         print(f"baked {bake_ply(a.splat, a.out, al['s'], al['R'], al['t'])} splats -> {a.out}")
