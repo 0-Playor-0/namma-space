@@ -252,7 +252,71 @@ def test_respawn_moves_an_island_spawn_into_the_main_area(tmp_path):
     assert not walk[1, 1]
     r = scene_bundle.respawn(tmp_path / "bundle")
     assert r["before"]["spawn_component_m2"] == 0.01
-    assert r["after"]["spawn_component_m2"] == r["after"]["walkable_m2"] - 0.01  # all but the island
+    assert r["after"]["spawn_component_m2"] == pytest.approx(r["after"]["walkable_m2"] - 0.01)  # all but the island
     manifest = json.loads((tmp_path / "bundle" / "manifest.json").read_text())
     pois = json.loads((tmp_path / "bundle" / "semantic" / "pois.json").read_text())
     assert manifest["startPosition"] == pois[0]["position"]
+
+
+# ------------------------------------------------------------------ dense evidence from the trained splat
+def _corridor():
+    """A 6 m walk along z = 0 (x 0..6); floor points everywhere in x -1..7, z -2..2; a desk at x 3, z 1.2."""
+    C = _walk(61, (0.0, 0.0))
+    xs, zs = np.meshgrid(np.arange(-1, 7, 0.05), np.arange(-2, 2, 0.05))
+    floor = np.column_stack([xs.ravel(), np.zeros(xs.size), zs.ravel()])
+    desk = np.array([[3 + dx, 0.75, 1.2 + dz] for dx in np.arange(-0.2, 0.21, 0.05) for dz in (-0.1, 0, 0.1)])
+    return C, floor, desk
+
+
+def _splat(xyz, alpha=0.9, size=0.05):
+    return {"xyz": np.asarray(xyz, float), "alpha": np.full(len(xyz), alpha), "size": np.full(len(xyz), size)}
+
+
+def test_seen_floor_near_the_path_is_walkable_and_islands_are_not_added():
+    C, floor, desk = _corridor()
+    lo, hi = np.array([-1.0, 0, -2.0]), np.array([7.0, 2.2, 2.0])
+    W = np.concatenate([floor, desk])
+    sparse_only = scene_bundle.navigation_grid(W, C, lo, hi, reach_radius=0.0)
+    seen = scene_bundle.navigation_grid(W, C, lo, hi)
+    a, b = scene_bundle.grid_stats(sparse_only), scene_bundle.grid_stats(seen)
+    assert b["walkable_m2"] > 2 * a["walkable_m2"] and b["components"] == 1
+    occ = ~scene_bundle.walkable_mask(seen)
+    cell = lambda x, z: (int((z - lo[2]) / 0.1), int((x - lo[0]) / 0.1))
+    assert not occ[cell(1.0, 1.2)]                 # 1.2 m off the path, floor seen: walkable
+    assert occ[cell(3.0, 1.2)]                     # ...but never inside the desk
+    assert occ[cell(1.0, 1.8)]                     # beyond REACH_RADIUS_M: still unknown
+    # floor seen only across a wall (not joined to the filmed area) stays unknown
+    wall = np.array([[x, 1.0, 0.9] for x in np.arange(-1, 7, 0.02) for _ in range(3)])
+    walled = scene_bundle.navigation_grid(np.concatenate([W, wall]), C, lo, hi)
+    assert ~scene_bundle.walkable_mask(walled)[cell(1.0, 1.4)]
+
+
+def test_splat_drops_unsupported_sfm_noise_and_adds_solid_obstacles():
+    C, floor, desk = _corridor()
+    lo, hi = np.array([-1.0, 0, -2.0]), np.array([7.0, 2.2, 2.0])
+    noise = np.array([[1.0, 1.0, 1.0], [1.02, 1.0, 1.0]])   # two stray SfM points in open air
+    chair = np.array([[5.0 + dx, 0.5, 1.0] for dx in (-0.05, 0, 0.05)])  # solid in the splat, no SfM points
+    W = np.concatenate([floor, desk, noise])
+    cell = lambda x, z: (int((z - lo[2]) / 0.1), int((x - lo[0]) / 0.1))
+    plain = ~scene_bundle.walkable_mask(scene_bundle.navigation_grid(W, C, lo, hi))
+    assert plain[cell(1.0, 1.0)] and not plain[cell(5.0, 1.0)]
+    splat = _splat(np.concatenate([desk, chair, _walk(5, (0.0, -1.0))[:, :3] * [1, 0, 1]]))
+    dense = ~scene_bundle.walkable_mask(scene_bundle.navigation_grid(W, C, lo, hi, splat=splat))
+    assert not dense[cell(1.0, 1.0)]               # noise with no splat behind it: dropped
+    assert dense[cell(5.0, 1.0)] and dense[cell(3.0, 1.2)]  # the chair from the splat, the desk from both
+    faint = _splat(np.concatenate([desk, chair]), alpha=0.05)
+    assert not (~scene_bundle.walkable_mask(scene_bundle.navigation_grid(W, C, lo, hi, splat=faint)))[cell(5.0, 1.0)]
+
+
+def test_splat_samples_reads_float_and_compressed_ply(tmp_path):
+    import compressed_ply
+    import train_gsplat
+    from test_kaggle_pipeline import _fake_splats
+    ply = tmp_path / "s.ply"
+    train_gsplat.write_ply(ply, **_fake_splats(300))
+    f = scene_bundle.splat_samples(ply)
+    compressed_ply.convert(ply, tmp_path / "s.compressed.ply")
+    c = scene_bundle.splat_samples(tmp_path / "s.compressed.ply")
+    assert len(f["xyz"]) == len(c["xyz"]) == 300 and 0 <= f["alpha"].min() and f["alpha"].max() <= 1
+    assert np.allclose(np.sort(f["alpha"]), np.sort(c["alpha"]), atol=0.01)
+    assert scene_bundle.splat_samples(tmp_path / "x.sog") is None

@@ -64,6 +64,21 @@ JUMP_FACTOR = 8.0               # a step this many times the median step is a ju
 JUMP_MIN_M = 0.5                # ...if it is also at least this long
 MIN_RUN_FRAMES = 10             # runs between jumps shorter than max(this, MIN_RUN_FRACTION of frames) are outliers
 MIN_RUN_FRACTION = 0.05
+# Dense evidence from the trained splat (world frame). The sparse SfM model has a few tens of thousands of points:
+# a stray pair of them blocks a 0.6 m disc of floor, and open floor more than FILMED_RADIUS_M from the path is
+# "unknown" even when it was clearly in view. With the splat as well:
+#  - a sparse obstacle with no solid splat anywhere near it (SPLAT_SUPPORT_M) is SfM noise and is dropped;
+#  - a cell holding SPLAT_MIN_SOLID solid (opacity >= SPLAT_SOLID_ALPHA), compact (largest axis <= SPLAT_MAX_SCALE_M)
+#    splats in the obstacle band is an obstacle even with no SfM point in it;
+#  - floor that was seen (SfM points or solid splats within FLOOR_BAND_M of y=0), within REACH_RADIUS_M of the
+#    walked path, not blocked and connected to the filmed walkable area, is walkable, not unknown.
+SPLAT_SOLID_ALPHA = 0.3
+SPLAT_MAX_SCALE_M = 0.3
+SPLAT_MIN_SOLID = 2
+SPLAT_SUPPORT_M = 0.2
+FLOOR_BAND_M = 0.15
+FLOOR_FILL_M = 0.2              # gaps this wide between floor evidence are closed
+REACH_RADIUS_M = 1.5
 SPAWN_RAYS = 32                 # directions tried for the spawn's facing
 SPAWN_RAY_MAX_M = 8.0
 
@@ -111,6 +126,26 @@ def pose_outliers(Cw: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     if not keep.any():
         keep = size == size.max()
     return ~keep[run], jump
+
+
+def splat_samples(path: Path | None) -> dict | None:
+    """Positions, opacity (0-1) and largest axis (metres) of a world-frame splat: float 3DGS PLY or PlayCanvas
+    compressed PLY. None for other formats (SOG) or a missing file, so callers fall back to SfM points only."""
+    if path is None or not Path(path).is_file() or Path(path).suffix != ".ply":
+        return None
+    raw = Path(path).read_bytes()
+    head = raw[:raw.find(b"end_header")]
+    if b"element chunk" in head:
+        from compressed_ply import decode
+        d = decode(raw)
+        return {"xyz": d["xyz"], "alpha": d["alpha"], "size": np.exp(d["log_scale"]).max(1)}
+    from clean_splat import read_ply
+    _, props, d = read_ply(Path(path))
+    col = {k: i for i, k in enumerate(props)}
+    xyz = d[:, [col["x"], col["y"], col["z"]]].astype(np.float64)
+    alpha = 1 / (1 + np.exp(-d[:, col["opacity"]].astype(np.float64)))
+    size = np.exp(d[:, [col[f"scale_{i}"] for i in range(3)]].astype(np.float64)).max(1)
+    return {"xyz": xyz, "alpha": alpha, "size": size}
 
 
 def walkable_mask(nav: dict) -> np.ndarray:
@@ -182,9 +217,11 @@ def choose_spawn(nav: dict, cameras_xz: np.ndarray | None = None) -> dict:
 
 
 def navigation_grid(W: np.ndarray, Cw: np.ndarray, lo: np.ndarray, hi: np.ndarray, start: np.ndarray | None = None,
-                    Fw: np.ndarray | None = None) -> dict:
+                    Fw: np.ndarray | None = None, splat: dict | None = None,
+                    filmed_radius: float = FILMED_RADIUS_M, reach_radius: float = REACH_RADIUS_M) -> dict:
     """W, Cw: points and camera centres (capture order) in world metres (floor at y=0); Fw: camera forward
-    directions. Outlier poses (pose_outliers) seed nothing. With start None the spawn is choose_spawn's."""
+    directions; splat: splat_samples() of the world-frame splat (optional dense evidence, see SPLAT_*).
+    Outlier poses (pose_outliers) seed nothing. With start None the spawn is choose_spawn's."""
     from scipy import ndimage
 
     outlier, jump = pose_outliers(Cw)
@@ -197,16 +234,28 @@ def navigation_grid(W: np.ndarray, Cw: np.ndarray, lo: np.ndarray, hi: np.ndarra
         ok = (ij[:, 0] >= 0) & (ij[:, 0] < w) & (ij[:, 1] >= 0) & (ij[:, 1] < h)
         return ij[ok]
 
-    band = W[(W[:, 1] > OBSTACLE_BAND_M[0]) & (W[:, 1] < OBSTACLE_BAND_M[1])]
-    count = np.zeros((h, w), int)
-    ij = cells(band[:, [0, 2]])
-    np.add.at(count, (ij[:, 1], ij[:, 0]), 1)
-    blocked = ndimage.binary_dilation(count >= MIN_POINTS, _disk(round(CLEARANCE_M / CELL_M)))
+    def count(xyz):
+        c = np.zeros((h, w), int)
+        ij = cells(xyz[:, [0, 2]])
+        np.add.at(c, (ij[:, 1], ij[:, 0]), 1)
+        return c
+
+    in_band = lambda X: (X[:, 1] > OBSTACLE_BAND_M[0]) & (X[:, 1] < OBSTACLE_BAND_M[1])
+    obstacle = count(W[in_band(W)]) >= MIN_POINTS
+    floor_seen = count(W[np.abs(W[:, 1]) < FLOOR_BAND_M]) > 0
+    if splat is not None:
+        X, solid = splat["xyz"], splat["alpha"] >= SPLAT_SOLID_ALPHA
+        dense = count(X[in_band(X) & solid & (splat["size"] <= SPLAT_MAX_SCALE_M)]) >= SPLAT_MIN_SOLID
+        support = ndimage.binary_dilation(count(X[in_band(X) & solid]) > 0, _disk(round(SPLAT_SUPPORT_M / CELL_M)))
+        obstacle = (obstacle & support) | dense
+        floor_seen |= count(X[(np.abs(X[:, 1]) < FLOOR_BAND_M) & solid]) > 0
+    blocked = ndimage.binary_dilation(obstacle, _disk(round(CLEARANCE_M / CELL_M)))
 
     walked = np.zeros((h, w), bool)
     ij = cells(Cw[~outlier][:, [0, 2]])
     walked[ij[:, 1], ij[:, 0]] = True
-    filmed = ndimage.binary_dilation(walked, _disk(round(FILMED_RADIUS_M / CELL_M)))
+    filmed = ndimage.binary_dilation(walked, _disk(round(filmed_radius / CELL_M)))
+    reach = ndimage.binary_dilation(walked, _disk(round(reach_radius / CELL_M)))
     walked = ndimage.binary_dilation(walked, _disk(round(WALKED_RADIUS_M / CELL_M)))
     # Consecutive camera positions are walked ground too, even when the gap between them is > 1 cell; but not
     # across a jump or to/from an outlier pose (that line was never walked and may cross furniture).
@@ -219,7 +268,11 @@ def navigation_grid(W: np.ndarray, Cw: np.ndarray, lo: np.ndarray, hi: np.ndarra
                 walked[p[0, 1], p[0, 0]] = True
 
     blocked &= ~walked
-    unknown = ~filmed & ~blocked
+    # Seen floor near the path counts as filmed, where it joins the filmed walkable area (no new islands).
+    floor_seen = ndimage.binary_closing(floor_seen, _disk(round(FLOOR_FILL_M / CELL_M))) & reach & ~blocked
+    labels, _ = ndimage.label((filmed | floor_seen) & ~blocked)
+    joined = np.isin(labels, np.unique(labels[filmed & ~blocked])) & (labels > 0)
+    unknown = ~(filmed | (floor_seen & joined)) & ~blocked
     flat = lambda m: np.flatnonzero(m.ravel()).tolist()  # index = z * width + x
     grid = {"version": 1, "coordinateSystem": "x-z-grid",
             "origin": {"x": round(float(lo[0]), 3), "z": round(float(lo[2]), 3)},
@@ -230,6 +283,7 @@ def navigation_grid(W: np.ndarray, Cw: np.ndarray, lo: np.ndarray, hi: np.ndarra
         views = view_masks(Cw[~outlier], Fw[~outlier], lo, w, h)
         views[blocked | unknown] = 0
         grid.update(viewSectors=VIEW_SECTORS, views=views.ravel().tolist())
+    grid["_floorEvidenceCells"] = int((floor_seen & joined & ~filmed).sum())  # popped by build(), not written
     if start is None:
         sp = choose_spawn(grid, Cw[~outlier][:, [0, 2]])
         grid["start"] = {"x": sp["x"], "z": sp["z"]}
@@ -445,8 +499,10 @@ def bake_ply(src: Path, dst: Path, s: float, R: np.ndarray, t: np.ndarray) -> in
 
 
 def build(sparse: Path, splat: Path, out: Path, title: str, quality: dict | None = None,
-          metres_per_unit: float | None = None) -> dict:
-    """`splat` must already be in the world frame (bake_ply with world_alignment's transform)."""
+          metres_per_unit: float | None = None, dense_splat: Path | None = None,
+          filmed_radius: float = FILMED_RADIUS_M, reach_radius: float = REACH_RADIUS_M) -> dict:
+    """`splat` must already be in the world frame (bake_ply with world_alignment's transform). `dense_splat`
+    (default: `splat` itself when it is a PLY) is the world-frame splat read for dense nav evidence."""
     a = world_alignment(sparse, out / "_sparse_txt", metres_per_unit)
     R, s, t, P, C, centres, axes = a["R"], a["s"], a["t"], a["P"], a["C"], a["centres"], a["axes"]
     floor, ceiling = a["floor"], a["ceiling"]
@@ -464,7 +520,9 @@ def build(sparse: Path, splat: Path, out: Path, title: str, quality: dict | None
     # (room_coverage.viewer_alignment's spawn ignores the grid: on the hostel capture it picked a mis-posed first
     # frame in a 0.86 m2 island.)
     outlier, _ = pose_outliers(Cw)
-    nav = navigation_grid(W, Cw, lo, hi, None, axes[:, 0] @ R.T)
+    samples = splat_samples(dense_splat or splat)
+    nav = navigation_grid(W, Cw, lo, hi, None, axes[:, 0] @ R.T, samples, filmed_radius, reach_radius)
+    floor_m2 = round(nav.pop("_floorEvidenceCells") * CELL_M ** 2, 2)
     sp = choose_spawn(nav, Cw[~outlier][:, [0, 2]])
     start = spawn_position(nav, sp)
 
@@ -514,7 +572,8 @@ def build(sparse: Path, splat: Path, out: Path, title: str, quality: dict | None
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
     shutil.rmtree(out / "_sparse_txt", ignore_errors=True)
-    stats = {"metres_per_unit": round(s, 4), "pose_outliers": int(outlier.sum()), "room_height_m": round(room_h, 2),
+    stats = {"metres_per_unit": round(s, 4), "pose_outliers": int(outlier.sum()),
+             "dense_evidence": samples is not None, "floor_evidence_m2": floor_m2, "room_height_m": round(room_h, 2),
              "room_size_m": (hi - lo).round(2).tolist(), "grid": [nav["width"], nav["height"]],
              "blocked_cells": len(nav["blocked"]), "unknown_cells": len(nav["unknown"]), **nav_stats}
     print("scene_bundle:", json.dumps(stats))
@@ -532,6 +591,12 @@ if __name__ == "__main__":
     ap.add_argument("--respawn", action="store_true", help="only re-pick the spawn of the existing bundle at <out>")
     ap.add_argument("--title", default="Captured room")
     ap.add_argument("--metres-per-unit", type=float, help="known model scale; skips the camera-height guess")
+    ap.add_argument("--dense-splat", type=Path, help="world-frame float PLY for dense nav evidence "
+                                                     "(default: the web splat when it is a PLY)")
+    ap.add_argument("--filmed-radius", type=float, default=FILMED_RADIUS_M,
+                    help=f"metres from the walked path that count as filmed (default {FILMED_RADIUS_M})")
+    ap.add_argument("--reach-radius", type=float, default=REACH_RADIUS_M,
+                    help=f"seen floor this close to the path is walkable (default {REACH_RADIUS_M}; 0 turns it off)")
     a = ap.parse_args()
     if a.respawn:
         respawn(a.out)
@@ -540,4 +605,5 @@ if __name__ == "__main__":
         shutil.rmtree(a.out.parent / "_sparse_txt", ignore_errors=True)
         print(f"baked {bake_ply(a.splat, a.out, al['s'], al['R'], al['t'])} splats -> {a.out}")
     else:
-        build(a.sparse, a.splat, a.out, a.title, metres_per_unit=a.metres_per_unit)
+        build(a.sparse, a.splat, a.out, a.title, metres_per_unit=a.metres_per_unit, dense_splat=a.dense_splat,
+              filmed_radius=a.filmed_radius, reach_radius=a.reach_radius)

@@ -462,7 +462,9 @@ def publish(web_splat: Path, title: str, report: Report, work: Path, sparse: Pat
         return
     try:
         import scene_bundle
-        report.data["bundle"] = scene_bundle.build(sparse, web_splat, work / "bundle", title)
+        world = work / "world" / "splat_world.ply"  # float, world frame: exact opacities for dense nav evidence
+        report.data["bundle"] = scene_bundle.build(sparse, web_splat, work / "bundle", title,
+                                                   dense_splat=world if world.is_file() else None)
     except Exception as e:  # noqa: BLE001 (a bundle failure must not lose the trained splat)
         report.check("bundle", False, f"scene bundle failed: {e}", "warn")
         return
