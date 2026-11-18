@@ -1,10 +1,10 @@
 # Open issues
 
-State on 15 Nov 2026, branch `main`. Everything below is either not done or done but not verified.
+State on 18 Nov 2026, branch `main`. Everything below is either not done or done but not verified.
 
 ## Deployment
-- **Production still serves Round 1.** <https://namma-space-pearl.vercel.app> runs the Round 1 build; the Round 2
-  features exist on this branch and on Vercel preview deployments (behind team login). Promote after review.
+- **Production serves Round 2** from `main` (since 18 Nov): <https://namma-space-pearl.vercel.app>. Every push
+  to `main` deploys production; other branches get previews behind team login.
 - **Round 1 PDF links.** The submitted Round 1 PDFs link to files on `round1/viewer-pipeline` (e.g. `viewer/`,
   `docs/HANDOFF_UJESHA.md`) that Round 2 removed. They break once this branch is merged there; the HTML sources in
   `docs/submission/` now point at the Round 1 commit `d5aa11a` instead. Merge to the default branch only after

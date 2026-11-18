@@ -13,8 +13,8 @@ Playor is re-filming the hostel; you are not blocked by it (see "Order of work")
 
 | Thing | State |
 |---|---|
-| Code | Branch `claude/modest-dirac-fm1mih` is 3+ commits ahead of `main`: hostel scene, spawn fix, pose-outlier filter, dense nav evidence, `--metres-per-unit`. Python 165 tests and vitest 828 tests pass; lint and typecheck are clean. |
-| Production | <https://namma-space-pearl.vercel.app> still serves **Round 1**. Vercel is connected to GitHub: a merge to `main` deploys production, any other branch gets a preview (behind Vercel login). |
+| Code | Everything is on `main` (hostel scene, spawn fix, pose-outlier filter, dense nav evidence, `--metres-per-unit`). Python 165 tests and vitest 828 tests pass; lint and typecheck are clean. Work on `main`. |
+| Production | <https://namma-space-pearl.vercel.app>. Vercel is connected to GitHub: **every push to `main` deploys production**; any other branch gets a preview (behind Vercel login). Round 2 went live from `main` on 18 Nov. |
 | Scenes | `classroom` (default, keep it default unless the team decides otherwise), `real-room`, `apartment`, fixtures, and new `hostel`. |
 | Hostel | Installed at `apps/studio/public/scenes/hostel/` from a Kaggle **preview** run. Opens with `?scene=hostel`; it is **not** in the scene switcher. It is very blurry and its nav grid is poor: walkable 16.24 m² in 18 pieces, 202 m² "unknown". The spawn was moved into the main area (spawn area 0.86 → 15.11 m²). Scale is a guess (0.4969 m per unit). |
 | Why the hostel is bad | (1) Preview training: 7k steps at 720p; the loss had not converged and 331k of 500k splats were near-invisible. (2) Coverage: only about half the floor and 24–36 % of each wall was filmed. (3) The nav grid closes off anything over 0.5 m from the walked path, and stray SfM points become obstacles. The camera poses were excellent (862/864 frames, 0.70 px), so the recording technique is fine; it just needs to cover more. |
@@ -26,7 +26,6 @@ Playor is re-filming the hostel; you are not blocked by it (see "Order of work")
 
 ```bash
 git clone https://github.com/0-Playor-0/namma-space && cd namma-space
-git checkout claude/modest-dirac-fm1mih
 cd apps/studio && npm ci && npm test && npm run lint && npm run build && cd ../..
 ```
 Python tests (from the repo root, in a venv with `pipeline/requirements.txt` + pytest): `python -m pytest -q tests/`.
@@ -36,8 +35,7 @@ Python tests (from the repo root, in a venv with `pipeline/requirements.txt` + p
 ## Order of work: don't wait for the hostel
 
 Playor is re-filming the hostel. **Do Part A now**; nothing in it needs the new video. Do Part B when the video
-arrives, then deploy again. If Part A is done first, deploy production with the current hostel left out of the
-scene switcher (it still opens by deep link) and keep going with Part A's later items.
+arrives. Production is already live; each finished item goes out when you push it to `main` (step 4).
 
 # Part A: now
 
@@ -74,18 +72,19 @@ In priority order (each also listed in `docs/OPEN_ISSUES.md`):
    enable it once the hostel is good enough to show. Do **not** change `DEFAULT_SCENE_NAME` unless the team agrees.
 4. **Docs.** Update `README.md` (Kaggle is no longer the main path) and `docs/OPEN_ISSUES.md`.
 
-## 4. Merge and deploy to production
+## 4. Deploying (every push to `main`)
 
-1. Everything green: `npm test`, `npm run lint`, `npm run build`, `npm run predeploy` (in `apps/studio`), and
-   `python -m pytest -q tests/`.
-2. Push the branch; check its Vercel preview (log in to Vercel to open it).
-3. **Round 1 links.** Before merging to `main`, confirm with the team that Round 1 judging no longer needs the old
-   links (see the Deployment section of `docs/OPEN_ISSUES.md`).
-4. Open a pull request into `main`, merge it. Vercel deploys production automatically.
-5. Open <https://namma-space-pearl.vercel.app> in a private window: the default scene loads, search, a route and
-   Follow route work, no console errors.
+`main` is production, so only push to it what you would show the judges.
+1. Before every push to `main`: `npm test`, `npm run lint`, `npm run build`, `npm run predeploy` (in
+   `apps/studio`), and `python -m pytest -q tests/` all pass.
+2. Small, safe changes (POIs, docs, a scene bundle that validates): commit and push to `main` directly.
+3. Bigger or riskier changes (engine, navigation, UI): push to a branch first, check its Vercel preview (log in to
+   Vercel to open it), then merge into `main`.
+4. After each production deploy, open <https://namma-space-pearl.vercel.app> in a private window: the default
+   scene loads, search, a route and Follow route work, no console errors. If something broke, `git revert` the
+   commit and push; Vercel redeploys the previous state.
 
-**Done when** production serves this build and the checks in 5 pass. You will deploy again after Part B.
+**Done when** everything from step 3 is live and the checks in 4 pass.
 
 # Part B: when Playor sends the new hostel video
 
@@ -126,7 +125,7 @@ furniture. Then:
 python pipeline/run_pipeline.py --approve work/hostel --note "walked it: <what you checked>"
 ```
 Tag the hostel's places with the POI editor (`?scene=hostel&edit=1`), enable it in the scene switcher (step 3.3),
-run `npm run validate:scenes`, and deploy again as in step 4.
+run `npm run validate:scenes`, and push to `main` as in step 4.
 
 **Done when** the hostel looks acceptable, its nav grid is sensible, it is approved, and production serves it.
 
