@@ -32,3 +32,6 @@ target/
 .env*
 .playwright-mcp/
 docs/round1/ABSTRACT.html
+
+# Local Claude Code settings: never committed
+.claude/

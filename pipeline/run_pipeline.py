@@ -454,7 +454,8 @@ def train(dataset: Path, work: Path, steps: int, trainer: str, report: Report, l
 
 
 # ---------------------------------------------------------------- publish
-def publish(web_splat: Path, title: str, report: Report, work: Path, sparse: Path | None = None) -> None:
+def publish(web_splat: Path, title: str, report: Report, work: Path, sparse: Path | None = None,
+            metres_per_unit: float | None = None) -> None:
     """Build the studio scene bundle (manifest, splat, navigation grid, start POI, quality report) in
     work/<name>/bundle/ from the COLMAP model. Copy that folder to apps/studio/public/scenes/<name>/ to open it."""
     if sparse is None:
@@ -464,6 +465,7 @@ def publish(web_splat: Path, title: str, report: Report, work: Path, sparse: Pat
         import scene_bundle
         world = work / "world" / "splat_world.ply"  # float, world frame: exact opacities for dense nav evidence
         report.data["bundle"] = scene_bundle.build(sparse, web_splat, work / "bundle", title,
+                                                   metres_per_unit=metres_per_unit,
                                                    dense_splat=world if world.is_file() else None)
     except Exception as e:  # noqa: BLE001 (a bundle failure must not lose the trained splat)
         report.check("bundle", False, f"scene bundle failed: {e}", "warn")
@@ -569,6 +571,9 @@ def main() -> int:
                          ".compressed.ply")
     ap.add_argument("--check", action="store_true", help="validate dependencies and input, then stop")
     ap.add_argument("--doctor", action="store_true", help="check dependencies, then stop")
+    ap.add_argument("--metres-per-unit", type=float, default=None,
+                    help="known model scale (metres per COLMAP unit) instead of the 1.45 m camera-height guess; "
+                         "from a measured distance: old metres_per_unit x real / measured-in-viewer")
     ap.add_argument("--approve", type=Path, metavar="WORKDIR", help="mark a run inspected_ok after viewing it")
     ap.add_argument("--note", default="", help="inspection note stored with --approve")
     a = ap.parse_args()
@@ -738,7 +743,7 @@ def main() -> int:
         with Timer() as t:
             try:
                 import scene_bundle
-                al = scene_bundle.world_alignment(sparse, work / "coverage" / "sparse_txt_world")
+                al = scene_bundle.world_alignment(sparse, work / "coverage" / "sparse_txt_world", a.metres_per_unit)
                 world = work / "world" / "splat_world.ply"
                 world.parent.mkdir(exist_ok=True)
                 scene_bundle.bake_ply(splat, world, al["s"], al["R"], al["t"])
@@ -760,7 +765,7 @@ def main() -> int:
                          encoder=ws.get("encoder"))
 
         with Timer() as t:
-            publish(web_splat, a.title, report, work, publish_sparse)
+            publish(web_splat, a.title, report, work, publish_sparse, a.metres_per_unit)
         report.stage("publish", t.seconds)
         report.data["total_seconds"] = round(time.time() - started, 1)
         report.data["status"] = AWAITING_INSPECTION
